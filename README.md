@@ -66,3 +66,26 @@ Once you have a copy of the source, you can embed it in your own Python package,
 $ cd pydrawise
 $ python -m pip install .
 ```
+
+## Throttling
+
+Hydrawise applies strict rate limits to both its GraphQL and REST APIs. The
+``HybridClient`` exposes ``gql_throttle`` and ``rest_throttle`` parameters that
+can be configured either with ``Throttler`` objects, dictionaries, or
+``ThrottleConfig`` instances. By default the client allows 5 GraphQL requests
+every 30 minutes and 2 REST requests each minute.
+
+For large controller fleets, increase the number of tokens available per epoch
+so that each controller can be refreshed within a single interval. A typical
+configuration might be:
+
+```python
+HybridClient(
+    auth,
+    gql_throttle={"epoch_interval": timedelta(minutes=30), "tokens_per_epoch": 20},
+    rest_throttle={"epoch_interval": timedelta(minutes=1), "tokens_per_epoch": 60},
+)
+```
+
+This allows the client to keep up with many controllers without being
+throttled by the remote service.

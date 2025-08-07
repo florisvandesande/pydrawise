@@ -9,7 +9,7 @@ from pytest import fixture
 
 from pydrawise.auth import HybridAuth
 from pydrawise.client import Hydrawise
-from pydrawise.hybrid import HybridClient, Throttler
+from pydrawise.hybrid import HybridClient, ThrottleConfig, Throttler
 from pydrawise.schema import Zone
 
 FROZEN_TIME = "2023-01-01 01:00:00"
@@ -55,6 +55,36 @@ def test_throttler():
         # Advancing time resets the throttler, allowing 2 tokens again
         frozen_time.tick(timedelta(seconds=61))
         assert throttle.check(2)
+
+
+def test_custom_throttle_kwargs(hybrid_auth, mock_gql_client):
+    api = HybridClient(
+        hybrid_auth,
+        gql_client=mock_gql_client,
+        gql_throttle={
+            "epoch_interval": timedelta(minutes=10),
+            "tokens_per_epoch": 3,
+        },
+        rest_throttle={
+            "epoch_interval": timedelta(seconds=30),
+            "tokens_per_epoch": 4,
+        },
+    )
+    assert api._gql_throttle.epoch_interval == timedelta(minutes=10)
+    assert api._gql_throttle.tokens_per_epoch == 3
+    assert api._rest_throttle.epoch_interval == timedelta(seconds=30)
+    assert api._rest_throttle.tokens_per_epoch == 4
+
+
+def test_custom_throttle_config(hybrid_auth, mock_gql_client):
+    cfg = ThrottleConfig(epoch_interval=timedelta(minutes=5), tokens_per_epoch=6)
+    api = HybridClient(
+        hybrid_auth,
+        gql_client=mock_gql_client,
+        rest_throttle=cfg,
+    )
+    assert api._rest_throttle.epoch_interval == timedelta(minutes=5)
+    assert api._rest_throttle.tokens_per_epoch == 6
 
 
 async def test_get_user(api, hybrid_auth, mock_gql_client, user, zone, status_schedule):
