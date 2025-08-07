@@ -5,7 +5,7 @@ This utilizes both the GraphQL and REST APIs.
 
 import asyncio
 import logging
-from asyncio import Lock
+from asyncio import Lock, Semaphore
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import wraps
@@ -99,15 +99,18 @@ class HybridClient(HydrawiseBase):
         gql_client: Hydrawise | None = None,
         gql_throttle: Throttler | ThrottleConfig | Mapping[str, Any] | None = None,
         rest_throttle: Throttler | ThrottleConfig | Mapping[str, Any] | None = None,
+        update_controller_concurrency: int = 5,
     ) -> None:
         if gql_client is None:
             gql_client = Hydrawise(auth, app_id)
         self._gql_client = gql_client
         self._auth = auth
         self._lock = Lock()
+        self._update_semaphore = Semaphore(update_controller_concurrency)
         self._user: User | None = None
         self._controllers: dict[int, Controller] = {}
         self._zones: dict[int, Zone] = {}
+
         def build_throttler(
             value: Throttler | ThrottleConfig | Mapping[str, Any] | None,
             *,
@@ -180,9 +183,9 @@ class HybridClient(HydrawiseBase):
     async def get_controller(self, controller_id: int) -> Controller:
         async with self._lock:
             if not self._controllers.get(controller_id) or self._gql_throttle.check():
-                self._controllers[
-                    controller_id
-                ] = await self._gql_client.get_controller(controller_id)
+                self._controllers[controller_id] = (
+                    await self._gql_client.get_controller(controller_id)
+                )
                 self._gql_throttle.mark()
             else:
                 _LOGGER.debug(
@@ -223,23 +226,24 @@ class HybridClient(HydrawiseBase):
         next_polls: list[int] = []
 
         async def update_controller(controller_id: int) -> None:
-            # Reserve a token before firing off the request so that concurrent
-            # updates correctly decrement available tokens.
-            self._rest_throttle.mark()
-            json = await self._auth.get(
-                "statusschedule.php", controller_id=controller_id
-            )
-            next_polls.append(int(json["nextpoll"]))
-            zones: list[Zone] = []
-            for zone_json in json["relays"]:
-                if zone := self._zones.get(zone_json["relay_id"]):
-                    zone.update_with_json(zone_json)
-                else:
-                    # Not an ideal case. This means we discovered a Zone from the
-                    # REST API, which means we get incomplete data.
-                    self._zones[zone_json["relay_id"]] = Zone.from_json(zone_json)
-                zones.append(self._zones[zone_json["relay_id"]])
-            self._controllers[controller_id].zones = zones
+            async with self._update_semaphore:
+                # Reserve a token before firing off the request so that concurrent
+                # updates correctly decrement available tokens.
+                self._rest_throttle.mark()
+                json = await self._auth.get(
+                    "statusschedule.php", controller_id=controller_id
+                )
+                next_polls.append(int(json["nextpoll"]))
+                zones: list[Zone] = []
+                for zone_json in json["relays"]:
+                    if zone := self._zones.get(zone_json["relay_id"]):
+                        zone.update_with_json(zone_json)
+                    else:
+                        # Not an ideal case. This means we discovered a Zone from the
+                        # REST API, which means we get incomplete data.
+                        self._zones[zone_json["relay_id"]] = Zone.from_json(zone_json)
+                    zones.append(self._zones[zone_json["relay_id"]])
+                self._controllers[controller_id].zones = zones
 
         await asyncio.gather(*(update_controller(cid) for cid in controller_ids))
 
