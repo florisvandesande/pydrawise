@@ -433,3 +433,43 @@ async def test_update_zones_concurrent(api, hybrid_auth, controller, status_sche
     hybrid_auth.get.reset_mock()
     await api._update_zones()
     hybrid_auth.get.assert_not_awaited()
+
+
+async def test_update_zones_concurrency_limit(
+    hybrid_auth, mock_gql_client, controller, status_schedule
+):
+    """Ensure the update controller concurrency can be limited."""
+    api = HybridClient(
+        hybrid_auth, gql_client=mock_gql_client, update_controller_concurrency=1
+    )
+
+    num_controllers = 5
+    controllers = []
+    for idx in range(num_controllers):
+        c = deepcopy(controller)
+        c.id = controller.id + idx + 1
+        controllers.append(c)
+        api._controllers[c.id] = c
+
+    api._rest_throttle.tokens_per_epoch = num_controllers
+    api._rest_throttle.tokens = 0
+
+    schedules = {}
+    for idx, c in enumerate(controllers):
+        sched = deepcopy(status_schedule)
+        for relay in sched["relays"]:
+            relay["relay_id"] += (idx + 1) * 0x100
+        schedules[c.id] = sched
+
+    async def fake_get(path, controller_id):
+        await asyncio.sleep(0.1)
+        return schedules[controller_id]
+
+    hybrid_auth.get.side_effect = fake_get
+
+    start = time.perf_counter()
+    await api._update_zones()
+    duration = time.perf_counter() - start
+
+    assert duration > 0.1 * num_controllers * 0.8
+    assert hybrid_auth.get.await_count == num_controllers
