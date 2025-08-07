@@ -4,7 +4,7 @@ This library should remain compatible with https://github.com/ptcryan/hydrawiser
 """
 
 import time
-from typing import Any
+from typing import Any, Optional
 
 import requests
 
@@ -36,16 +36,21 @@ class LegacyHydrawise:
     def __init__(self, user_token: str, load_on_init: bool = True) -> None:
         self._api_key = user_token
         self.controller_info: dict[str, Any] = {}
+        self.controllers: list[dict[str, Any]] = []
+        self.controllers_by_id: dict[int, dict[str, Any]] = {}
+        self.controller_statuses: dict[int, dict[str, Any]] = {}
         self.controller_status: dict[str, Any] = {}
+        self._current_controller_id: Optional[int] = None
+        self._relays_by_id: dict[int, dict] = {}
+        self._relays_by_zone_number: dict[int, dict] = {}
         if load_on_init:
             self.update_controller_info()
 
     @property
     def current_controller(self) -> dict:
-        controllers = self.controller_info.get("controllers", [])
-        if not controllers:
+        if self._current_controller_id is None:
             return {}
-        return controllers[0]
+        return self.controllers_by_id.get(self._current_controller_id, {})
 
     @property
     def status(self) -> str | None:
@@ -53,7 +58,7 @@ class LegacyHydrawise:
 
     @property
     def controller_id(self) -> int | None:
-        return self.current_controller.get("controller_id")
+        return self._current_controller_id
 
     @property
     def customer_id(self) -> int | None:
@@ -70,11 +75,11 @@ class LegacyHydrawise:
 
     @property
     def relays_by_id(self) -> dict[int, dict]:
-        return {r["relay_id"]: r for r in self.controller_status.get("relays", [])}
+        return self._relays_by_id
 
     @property
     def relays_by_zone_number(self) -> dict[int, dict]:
-        return {r["relay"]: r for r in self.controller_status.get("relays", [])}
+        return self._relays_by_zone_number
 
     @property
     def name(self) -> str | None:
@@ -90,8 +95,47 @@ class LegacyHydrawise:
 
     def update_controller_info(self) -> bool:
         self.controller_info = self._get_controller_info()
-        self.controller_status = self._get_controller_status()
+        self.controllers = self.controller_info.get("controllers", [])
+        self.controllers_by_id = {
+            c["controller_id"]: c for c in self.controllers
+        }
+        self.controller_statuses = {}
+        if self.controllers:
+            self.set_current_controller(self.controllers[0]["controller_id"])
+        else:
+            self._current_controller_id = None
+            self.controller_status = {}
+            self._relays_by_id = {}
+            self._relays_by_zone_number = {}
         return True
+
+    def set_current_controller(
+        self, controller_id: Optional[int] = None, index: Optional[int] = None
+    ) -> None:
+        if controller_id is None and index is None:
+            raise ValueError("Must provide controller_id or index")
+
+        if index is not None:
+            try:
+                controller = self.controllers[index]
+            except IndexError as exc:
+                raise ValueError("Invalid controller index") from exc
+            controller_id = controller["controller_id"]
+
+        if controller_id not in self.controllers_by_id:
+            raise ValueError("Unknown controller id")
+
+        self._current_controller_id = controller_id
+
+        if controller_id not in self.controller_statuses:
+            self.controller_statuses[controller_id] = self._get_controller_status(
+                controller_id
+            )
+
+        self.controller_status = self.controller_statuses[controller_id]
+        relays = self.controller_status.get("relays", [])
+        self._relays_by_id = {r["relay_id"]: r for r in relays}
+        self._relays_by_zone_number = {r["relay"]: r for r in relays}
 
     def _get(self, path: str, **kwargs) -> dict:
         url = f"{REST_URL}/{path}"
@@ -111,8 +155,8 @@ class LegacyHydrawise:
     def _get_controller_info(self) -> dict:
         return self._get("customerdetails.php", type="controllers")
 
-    def _get_controller_status(self) -> dict:
-        return self._get("statusschedule.php")
+    def _get_controller_status(self, controller_id: int) -> dict:
+        return self._get("statusschedule.php", controller_id=controller_id)
 
     def suspend_zone(self, days: int, zone: int | None = None) -> dict:
         params: dict[str, Any] = {}
