@@ -1,3 +1,5 @@
+import asyncio
+import time
 from copy import deepcopy
 from datetime import datetime, timedelta
 from unittest.mock import call, create_autospec
@@ -313,3 +315,49 @@ async def test_get_sensors(api, hybrid_auth, mock_gql_client, controller, rain_s
         assert await api.get_sensors(controller) == [sensor]
         mock_gql_client.get_sensors.assert_not_awaited()
         hybrid_auth.get.assert_not_awaited()
+
+
+async def test_update_zones_concurrent(api, hybrid_auth, controller, status_schedule):
+    """Stress test that multiple controllers update within throttle limits."""
+    num_controllers = 5
+
+    # Prepare controllers with unique IDs and register them with the client.
+    controllers = []
+    for idx in range(num_controllers):
+        c = deepcopy(controller)
+        c.id = controller.id + idx + 1
+        controllers.append(c)
+        api._controllers[c.id] = c
+
+    # Allow exactly one request per controller.
+    api._rest_throttle.tokens_per_epoch = num_controllers
+    api._rest_throttle.tokens = 0
+
+    # Generate unique zone IDs for each controller and create side effects.
+    schedules = {}
+    for idx, c in enumerate(controllers):
+        sched = deepcopy(status_schedule)
+        for relay in sched["relays"]:
+            relay["relay_id"] += (idx + 1) * 0x100
+        schedules[c.id] = sched
+
+    async def fake_get(path, controller_id):
+        await asyncio.sleep(0.1)
+        return schedules[controller_id]
+
+    hybrid_auth.get.side_effect = fake_get
+
+    start = time.perf_counter()
+    await api._update_zones()
+    duration = time.perf_counter() - start
+
+    # Requests should run concurrently, so duration should be well under the
+    # sequential time (0.1s * num_controllers).
+    assert duration < 0.1 * num_controllers * 0.8
+    assert hybrid_auth.get.await_count == num_controllers
+    assert api._rest_throttle.tokens == num_controllers
+
+    # Subsequent update should be throttled and make no additional calls.
+    hybrid_auth.get.reset_mock()
+    await api._update_zones()
+    hybrid_auth.get.assert_not_awaited()

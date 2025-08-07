@@ -3,6 +3,7 @@
 This utilizes both the GraphQL and REST APIs.
 """
 
+import asyncio
 import logging
 from asyncio import Lock
 from dataclasses import dataclass
@@ -196,13 +197,15 @@ class HybridClient(HydrawiseBase):
             _LOGGER.debug("REST client throttled: %s", self._rest_throttle.debug_str)
             return
 
-        for controller_id in controller_ids:
+        async def update_controller(controller_id: int) -> None:
+            # Reserve a token before firing off the request so that concurrent
+            # updates correctly decrement available tokens.
+            self._rest_throttle.mark()
             json = await self._auth.get(
                 "statusschedule.php", controller_id=controller_id
             )
-            self._rest_throttle.mark()
             self._rest_throttle.epoch_interval = timedelta(seconds=json["nextpoll"])
-            zones = []
+            zones: list[Zone] = []
             for zone_json in json["relays"]:
                 if zone := self._zones.get(zone_json["relay_id"]):
                     zone.update_with_json(zone_json)
@@ -212,6 +215,8 @@ class HybridClient(HydrawiseBase):
                     self._zones[zone_json["relay_id"]] = Zone.from_json(zone_json)
                 zones.append(self._zones[zone_json["relay_id"]])
             self._controllers[controller_id].zones = zones
+
+        await asyncio.gather(*(update_controller(cid) for cid in controller_ids))
 
     @throttle
     async def get_zone(self, zone_id: int) -> Zone:
