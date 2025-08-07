@@ -220,6 +220,8 @@ class HybridClient(HydrawiseBase):
             _LOGGER.debug("REST client throttled: %s", self._rest_throttle.debug_str)
             return
 
+        next_polls: list[int] = []
+
         async def update_controller(controller_id: int) -> None:
             # Reserve a token before firing off the request so that concurrent
             # updates correctly decrement available tokens.
@@ -227,7 +229,7 @@ class HybridClient(HydrawiseBase):
             json = await self._auth.get(
                 "statusschedule.php", controller_id=controller_id
             )
-            self._rest_throttle.epoch_interval = timedelta(seconds=json["nextpoll"])
+            next_polls.append(int(json["nextpoll"]))
             zones: list[Zone] = []
             for zone_json in json["relays"]:
                 if zone := self._zones.get(zone_json["relay_id"]):
@@ -240,6 +242,11 @@ class HybridClient(HydrawiseBase):
             self._controllers[controller_id].zones = zones
 
         await asyncio.gather(*(update_controller(cid) for cid in controller_ids))
+
+        if next_polls:
+            # Use the maximum next poll value to ensure we do not poll any
+            # controller more frequently than recommended.
+            self._rest_throttle.epoch_interval = timedelta(seconds=max(next_polls))
 
     @throttle
     async def get_zone(self, zone_id: int) -> Zone:
