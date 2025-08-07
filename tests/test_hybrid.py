@@ -180,6 +180,48 @@ async def test_get_controllers(
         )
 
 
+async def test_get_controllers_many(
+    api, hybrid_auth, mock_gql_client, controllers, status_schedule
+):
+    with freeze_time(FROZEN_TIME):
+        mock_gql_client.get_controllers.return_value = deepcopy(controllers)
+        result = await api.get_controllers()
+        mock_gql_client.get_controllers.assert_awaited_once_with(True, True)
+        assert result == controllers
+        assert api._rest_throttle.tokens_per_epoch == len(controllers) + 1
+
+        mock_gql_client.get_controllers.reset_mock()
+        assert await api.get_controllers() == controllers
+        mock_gql_client.get_controllers.assert_awaited_once_with(True, True)
+
+        mock_gql_client.get_controllers.reset_mock()
+        schedules = {}
+        for ctrl in controllers:
+            sched = deepcopy(status_schedule)
+            relay = deepcopy(status_schedule["relays"][0])
+            relay["relay_id"] = ctrl.zones[0].id
+            relay["relay"] = ctrl.zones[0].number.value
+            relay["time"] = 1576800000
+            sched["relays"] = [relay]
+            schedules[ctrl.id] = sched
+
+        async def fake_get(path, controller_id):
+            return schedules[controller_id]
+
+        hybrid_auth.get.side_effect = fake_get
+        result2 = await api.get_controllers()
+        mock_gql_client.get_controllers.assert_not_awaited()
+        assert hybrid_auth.get.await_count == len(controllers)
+        for ctrl in result2:
+            assert ctrl.zones[0].status.suspended_until == datetime.max
+        assert api._rest_throttle.tokens == len(controllers)
+
+        hybrid_auth.get.reset_mock()
+        assert await api.get_controllers() == result2
+        mock_gql_client.get_controllers.assert_not_awaited()
+        hybrid_auth.get.assert_not_awaited()
+
+
 async def test_get_controller(api, hybrid_auth, mock_gql_client, controller, zone):
     with freeze_time(FROZEN_TIME):
         controller.zones = [deepcopy(zone)]
