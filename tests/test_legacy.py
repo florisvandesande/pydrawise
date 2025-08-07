@@ -18,7 +18,7 @@ def test_update(mock_request, customer_details, status_schedule):
             ),
             mock.call(
                 "https://api.hydrawise.com/api/v1/statusschedule.php",
-                params={"api_key": API_KEY},
+                params={"api_key": API_KEY, "controller_id": 9876},
                 timeout=10,
             ),
         ]
@@ -47,6 +47,38 @@ def test_attributes(mock_request, customer_details, status_schedule):
     assert client.name == "Main Controller"
     assert client.sensors == status_schedule["sensors"]
     assert client.running is None
+
+
+def test_switch_controllers(customer_details, status_schedule):
+    status_schedule_alt = {
+        **status_schedule,
+        "relays": [
+            {**status_schedule["relays"][0], "name": "Alt Zone"}
+        ]
+        + status_schedule["relays"][1:],
+    }
+    controller_info_resp = mock.Mock(status_code=200)
+    controller_info_resp.json.return_value = customer_details
+    status1_resp = mock.Mock(status_code=200)
+    status1_resp.json.return_value = status_schedule
+    status2_resp = mock.Mock(status_code=200)
+    status2_resp.json.return_value = status_schedule_alt
+
+    with mock.patch("requests.get") as req:
+        req.side_effect = [controller_info_resp, status1_resp, status2_resp]
+        client = legacy.LegacyHydrawise(API_KEY)
+        assert client.controller_id == 9876
+        assert client.relays[0]["name"] == "Zone A"
+
+        client.set_current_controller(index=1)
+        assert client.controller_id == 63507
+        assert client.name == "Other Controller"
+        assert client.relays[0]["name"] == "Alt Zone"
+
+        # Switching back should use cached data and not perform extra request
+        client.set_current_controller(controller_id=9876)
+        assert client.controller_id == 9876
+        assert client.relays[0]["name"] == "Zone A"
 
 
 @mock.patch("requests.get")
