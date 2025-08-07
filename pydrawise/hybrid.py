@@ -166,6 +166,9 @@ class HybridClient(HydrawiseBase):
                 self._gql_throttle.mark()
                 # Make sure we have enough tokens to refresh the user info & all controllers.
                 self._rest_throttle.tokens_per_epoch = len(controllers) + 1
+                # Reset tokens after controller count changes so that subsequent
+                # updates can happen immediately under the new limit.
+                self._rest_throttle.tokens = 0
                 for controller in controllers:
                     self._controllers[controller.id] = controller
                     for zone in controller.zones:
