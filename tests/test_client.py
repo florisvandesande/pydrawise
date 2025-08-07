@@ -116,6 +116,19 @@ async def test_get_controllers_no_sensors(
     assert len(controller.sensors) == 0
 
 
+async def test_get_controllers_many(
+    api: Hydrawise, mock_session, controllers_json
+):
+    mock_session.execute.return_value = {"me": {"controllers": controllers_json}}
+    controllers = await api.get_controllers()
+    mock_session.execute.assert_awaited_once()
+    expected = deserialize(list[Controller], controllers_json)
+    assert controllers == expected
+    assert len(controllers) == len(controllers_json)
+    zone_ids = {z.id for c in controllers for z in c.zones}
+    assert len(zone_ids) == len(controllers_json)
+
+
 async def test_get_controller(api: Hydrawise, mock_session, controller_json):
     mock_session.execute.return_value = {"controller": controller_json}
     controller = await api.get_controller(9876)

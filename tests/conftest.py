@@ -1,4 +1,5 @@
 from unittest import mock
+from copy import deepcopy
 
 from pytest import fixture
 
@@ -207,6 +208,28 @@ def zone_json():
         },
         "suspensions": [],
     }
+
+
+@fixture
+def controllers_json(controller_json, zone_json):
+    controllers = []
+    for idx in range(12):
+        ctrl = deepcopy(controller_json)
+        ctrl["id"] = controller_json["id"] + idx
+        ctrl["name"] = f"Controller {idx + 1}"
+        zone = deepcopy(zone_json)
+        zone["id"] = zone_json["id"] + idx
+        zone["number"]["value"] = idx + 1
+        zone["number"]["label"] = f"Zone {idx + 1}"
+        zone["name"] = f"Zone {chr(65 + idx)}"
+        ctrl["zones"] = [zone]
+        controllers.append(ctrl)
+    yield controllers
+
+
+@fixture
+def controllers(controllers_json):
+    yield deserialize(list[Controller], controllers_json)
 
 
 @fixture
