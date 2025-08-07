@@ -252,6 +252,58 @@ async def test_get_controllers_many(
         hybrid_auth.get.assert_not_awaited()
 
 
+async def test_rest_tokens_reset_on_controller_increase(
+    api, hybrid_auth, mock_gql_client, controller, zone, status_schedule
+):
+    """Ensure REST tokens reset when controller count grows."""
+    with freeze_time(FROZEN_TIME):
+        # Start with a single controller and consume all REST tokens.
+        controller1 = deepcopy(controller)
+        controller1.zones = [deepcopy(zone)]
+        mock_gql_client.get_controllers.return_value = [controller1]
+        await api.get_controllers()
+
+        # Exhaust REST tokens to simulate prior updates.
+        api._rest_throttle.tokens = api._rest_throttle.tokens_per_epoch
+
+        # Discover a new controller and ensure tokens reset.
+        controller2 = deepcopy(controller)
+        controller2.id += 1
+        controller2.zones = [deepcopy(zone)]
+        controller2.zones[0].id += 0x100
+        controller2.zones[0].number.value += 1
+        controller2.zones[0].number.label = f"Zone {controller2.zones[0].number.value}"
+
+        mock_gql_client.get_controllers.return_value = [controller1, controller2]
+        await api.get_controllers()
+        assert api._rest_throttle.tokens_per_epoch == 3
+        assert api._rest_throttle.tokens == 0
+
+        # Force REST usage by exhausting GraphQL tokens.
+        api._gql_throttle.tokens = api._gql_throttle.tokens_per_epoch
+        mock_gql_client.get_controllers.reset_mock()
+
+        schedules = {}
+        for ctrl in (controller1, controller2):
+            sched = deepcopy(status_schedule)
+            relay = deepcopy(status_schedule["relays"][0])
+            relay["relay_id"] = ctrl.zones[0].id
+            relay["relay"] = ctrl.zones[0].number.value
+            relay["time"] = 1576800000
+            sched["relays"] = [relay]
+            schedules[ctrl.id] = sched
+
+        async def fake_get(path, controller_id):
+            return schedules[controller_id]
+
+        hybrid_auth.get.side_effect = fake_get
+        result = await api.get_controllers()
+        mock_gql_client.get_controllers.assert_not_awaited()
+        assert hybrid_auth.get.await_count == 2
+        assert api._rest_throttle.tokens == 2
+        assert len(result) == 2
+
+
 async def test_get_controller(api, hybrid_auth, mock_gql_client, controller, zone):
     with freeze_time(FROZEN_TIME):
         controller.zones = [deepcopy(zone)]
