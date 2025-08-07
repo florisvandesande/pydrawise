@@ -70,8 +70,10 @@ class RestClient(HydrawiseBase):
         :param controller_id: Unique identifier for the controller to retrieve.
         :rtype: Controller
         """
-        _ = controller_id  # unused
-        raise NotImplementedError
+        resp_json = await self._get("customerdetails.php", controller_id=controller_id)
+        controller = Controller.from_json(resp_json["controllers"][0])
+        controller.zones = await self.get_zones(controller)
+        return controller
 
     async def get_zones(self, controller: Controller) -> list[Zone]:
         """Retrieves zones associated with the given controller.

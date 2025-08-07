@@ -1,4 +1,5 @@
 import re
+from copy import deepcopy
 from datetime import datetime, timedelta
 from unittest import mock
 
@@ -99,6 +100,36 @@ async def test_get_controllers(
             want_zones = [0x10A, 0x10B, 0x10C, 0x10D, 0x10E, 0x10F]
             assert [z.id for z in controllers[0].zones] == want_zones
             assert [z.id for z in controllers[1].zones] == want_zones
+
+
+async def test_get_controller(
+    rest_auth: RestAuth, customer_details: dict, status_schedule: dict
+) -> None:
+    """Test the get_controller method."""
+    client = rest.RestClient(rest_auth)
+    controller_only = deepcopy(customer_details)
+    controller_only["controllers"] = [customer_details["controllers"][0]]
+    with freeze_time("2023-01-01 01:00:00"):
+        with aioresponses() as m:
+            m.get(
+                f"https://api.hydrawise.com/api/v1/customerdetails.php?api_key={API_KEY}&controller_id=9876",
+                status=200,
+                payload=controller_only,
+            )
+            m.get(
+                f"https://api.hydrawise.com/api/v1/statusschedule.php?api_key={API_KEY}&controller_id=9876",
+                status=200,
+                payload=status_schedule,
+            )
+            controller = await client.get_controller(9876)
+            assert controller.id == 9876
+            assert controller.name == "Main Controller"
+            assert controller.hardware.serial_number == "A0B1C2D3"
+            want_last_contact_time = datetime(2023, 1, 1, 0, 0, 0)
+            assert controller.last_contact_time == want_last_contact_time
+            want_zones = [0x10A, 0x10B, 0x10C, 0x10D, 0x10E, 0x10F]
+            assert [z.id for z in controller.zones] == want_zones
+            assert client.next_poll == timedelta(seconds=60)
 
 
 async def test_get_zones(rest_auth: RestAuth, status_schedule: dict) -> None:
