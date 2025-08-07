@@ -9,7 +9,7 @@ from asyncio import Lock
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import wraps
-from typing import Awaitable, Callable, Coroutine, ParamSpec, TypeVar
+from typing import Any, Awaitable, Callable, Coroutine, Mapping, ParamSpec, TypeVar
 
 from .auth import HybridAuth
 from .base import HydrawiseBase
@@ -58,6 +58,14 @@ class Throttler:
         return f"{self.tokens}/{self.tokens_per_epoch} tokens used; next epoch: {self.next_epoch}"
 
 
+@dataclass
+class ThrottleConfig:
+    """Configuration object for :class:`Throttler`."""
+
+    epoch_interval: timedelta
+    tokens_per_epoch: int = 1
+
+
 T = TypeVar("T")
 P = ParamSpec("P")
 
@@ -89,8 +97,8 @@ class HybridClient(HydrawiseBase):
         auth: HybridAuth,
         app_id: str = DEFAULT_APP_ID,
         gql_client: Hydrawise | None = None,
-        gql_throttle: Throttler | None = None,
-        rest_throttle: Throttler | None = None,
+        gql_throttle: Throttler | ThrottleConfig | Mapping[str, Any] | None = None,
+        rest_throttle: Throttler | ThrottleConfig | Mapping[str, Any] | None = None,
     ) -> None:
         if gql_client is None:
             gql_client = Hydrawise(auth, app_id)
@@ -100,16 +108,31 @@ class HybridClient(HydrawiseBase):
         self._user: User | None = None
         self._controllers: dict[int, Controller] = {}
         self._zones: dict[int, Zone] = {}
-        if gql_throttle is None:
-            gql_throttle = Throttler(
-                epoch_interval=timedelta(minutes=30), tokens_per_epoch=5
+        def build_throttler(
+            value: Throttler | ThrottleConfig | Mapping[str, Any] | None,
+            *,
+            default_interval: timedelta,
+            default_tokens: int,
+        ) -> Throttler:
+            if isinstance(value, Throttler):
+                return value
+            if isinstance(value, ThrottleConfig):
+                return Throttler(
+                    epoch_interval=value.epoch_interval,
+                    tokens_per_epoch=value.tokens_per_epoch,
+                )
+            if isinstance(value, Mapping):
+                return Throttler(**value)
+            return Throttler(
+                epoch_interval=default_interval, tokens_per_epoch=default_tokens
             )
-        self._gql_throttle: Throttler = gql_throttle
-        if rest_throttle is None:
-            rest_throttle = Throttler(
-                epoch_interval=timedelta(minutes=1), tokens_per_epoch=2
-            )
-        self._rest_throttle: Throttler = rest_throttle
+
+        self._gql_throttle: Throttler = build_throttler(
+            gql_throttle, default_interval=timedelta(minutes=30), default_tokens=5
+        )
+        self._rest_throttle: Throttler = build_throttler(
+            rest_throttle, default_interval=timedelta(minutes=1), default_tokens=2
+        )
 
     async def get_user(self, fetch_zones: bool = True) -> User:
         async with self._lock:
